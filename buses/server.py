@@ -3,29 +3,35 @@ import logging
 
 import trio
 from trio_websocket import serve_websocket, WebSocketRequest, ConnectionClosed
+from routes import ROUTES
 
 logger = logging.getLogger("buses.server")
 
-test_data = {
+bus = {
+    "busId": "а982ан", "lat": None, "lng": None, "route": "156"
+}
+
+message = {
     "msgType": "Buses",
-    "buses": [
-        {"busId": "c790сс", "lat": 55.7500, "lng": 37.600, "route": "120"},
-        {"busId": "a134aa", "lat": 55.7494, "lng": 37.621, "route": "670к"},
-    ],
+    "buses": [bus],
 }
 
 
 async def echo_server(request: WebSocketRequest):
     ws = await request.accept()
     logger.debug("Established connection: %s", ws)
+    route: dict = ROUTES.get("156")
 
-    while True:
+    for coordinates in route["coordinates"]:
         try:
-            message = await ws.get_message()
-            logger.debug("Got message: %s", message)
-            await ws.send_message(json.dumps(test_data))
+            bus["lat"] = coordinates[0]
+            bus["lng"] = coordinates[1]
+            payload = json.dumps(message)
+            logger.debug("Sending payload: %s", payload)
+            await ws.send_message(payload)
         except ConnectionClosed:
             break
+        await trio.sleep(0.1)
 
 
 def parse_config():
