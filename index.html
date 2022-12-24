@@ -10,8 +10,7 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
   <link href="https://unpkg.com/beautifymarker@1.0.7/leaflet-beautify-marker-icon.css" rel="stylesheet">
 
-
-  <style type="text/css">
+  <style>
     body {
       padding: 0;
       margin: 0;
@@ -31,11 +30,11 @@
   <script src="https://unpkg.com/beautifymarker@1.0.7/leaflet-beautify-marker-icon.js"></script>
   <script src="https://unpkg.com/leaflet-control-custom@1.0.0/Leaflet.Control.Custom.js"></script>
 
-
   <script src="https://cdnjs.cloudflare.com/ajax/libs/loglevel/1.6.4/loglevel.min.js" integrity="sha256-ACTlnmNCkOooSKkPCKYbiex8WLE82aeiN+Z9ElZag5Q=" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/validate.js/0.13.1/validate.min.js" integrity="sha256-xgP6yiUGsRLSmsC8oW0KrRWiK2ek7cSBznIDMEcdp/U=" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.15/lodash.min.js"></script>
 
+  <!-- Validation -->
   <script type="text/javascript">
     const serverUpdateMsgScheme = {
       msgType: {presence: true, type: 'string', format: /Buses/},
@@ -48,18 +47,18 @@
       route: {},
     };
 
-    function validateServerUpdateMsg(jsonData){
+    function validateServerUpdateMsg(jsonData) {
       const errors = validate(jsonData, serverUpdateMsgScheme);
 
-      if (errors){
+      if (errors) {
         log.error('Server message format is broken. Check out errors:', errors);
         log.info('Following message data was received:', jsonData);
         return false;
       }
 
-      for (let busInfo of jsonData.buses){
+      for (let busInfo of jsonData.buses) {
         const errors = validate(busInfo, busInfoScheme);
-        if (errors){
+        if (errors) {
           log.error('Server message format is broken. Check out bus info errors:', errors);
           log.info('Following bus info was received:', busInfo);
           return false;
@@ -69,37 +68,38 @@
       return true;
     }
   </script>
+
+  <!-- WebSocket management -->
   <script type="text/javascript">
-    class WebsocketClosed extends Error {
+    class WebSocketClosed extends Error {
         constructor() {
-          super('WebsocketClosed');
+          super('WebSocketClosed');
         }
-    };
+    }
 
-    async function waitTillSocketOpen(webSocket){
+    async function waitTillSocketOpen(webSocket) {
       return new Promise((resolve, reject) => {
-        const onSocketClose = ()=>{
-          reject(new WebsocketClosed());
-          webSocket.removeEventListener('open', onWebsocketOpen);
+        const onSocketClose = () => {
+          reject(new WebSocketClosed());
+          webSocket.removeEventListener('open', onSocketOpen);
         }
-
-        const onWebsocketOpen = event => {
+        // TODO: Не перепутаны ли здесь listeners?
+        const onSocketOpen = () => {
           resolve();
           webSocket.removeEventListener('close', onSocketClose);
         }
         webSocket.addEventListener('close', onSocketClose);
-        webSocket.addEventListener('open', onWebsocketOpen);
+        webSocket.addEventListener('open', onSocketOpen);
       });
     }
 
-    async function waitForIncomeMsg(webSocket){
+    async function waitForIncomeMsg(webSocket) {
       return new Promise((resolve, reject) => {
-        const onSocketClose = ()=>{
-          reject(new WebsocketClosed());
+        const onSocketClose = () => {
+          reject(new WebSocketClosed());
           webSocket.removeEventListener('message', onMsgReceive);
         }
-
-        const onMsgReceive = event => {
+        const onMsgReceive = (event) => {
           resolve(event.data);
           webSocket.removeEventListener('close', onSocketClose);
         }
@@ -108,6 +108,8 @@
       });
     }
   </script>
+
+  <!-- Main -->
   <script type="text/javascript">
     const websocketAddress = localStorage.getItem('websocket') || 'ws://127.0.0.1:8000/ws';
     log.info(`Websocket address is ${websocketAddress}`);
@@ -125,7 +127,7 @@
                  '<button type="button" class="btn btn-info" id="save-btn">Сохранить</button>' +
                  '<br/>' +
                  `<label>` +
-                   `<input name="debug" type="checkbox" ${log.getLevel()<=1 && 'checked'}/>` +
+                   `<input name="debug" type="checkbox" ${log.getLevel() <= 1 && 'checked'}/>` +
                  'отладка' +
                  '</label>',
         classes: 'btn-group-vertical btn-group-sm',
@@ -133,27 +135,23 @@
           padding: '10px',
           background: 'rgba(255, 255, 255, 0.7)',
         },
-        events:
-        {
-          click: function(event)
-          {
-            if (event.target.name == 'debug'){
+        events: {
+          click: function(event) {
+            if (event.target.name === 'debug') {
               log.setLevel(event.target.checked && 'debug' || 'warn');
             }
-
-            if (event.target.id == 'save-btn'){
+            if (event.target.id === 'save-btn') {
               const newWebsocketAddress = document.getElementsByName("address")[0].value;
               localStorage.setItem('websocket', newWebsocketAddress)
               document.location.reload();
             }
           },
         }
-    })
-    .addTo(map);
+    }).addTo(map);
 
     const busMarkers = {};
 
-    function drawBusMarker(latLng, routeNumber='???', busId='???'){
+    function drawBusMarker(latLng, routeNumber = '???', busId = '???') {
       const icon = L.BeautifyIcon.icon({
           isAlphaNumericIcon: true,
           text: '' + routeNumber,
@@ -170,13 +168,13 @@
       return marker;
     }
 
-    async function sleep(delay){
+    async function sleep(delay) {
       return new Promise((resolve, reject) => {
         setTimeout(resolve, delay);
       });
     }
 
-    function sendBounds(socket, bounds){
+    function sendBounds(socket, bounds) {
       const msg = {
         'msgType': 'newBounds',
         'data': {
@@ -190,13 +188,11 @@
       log.debug('Send new bounds to the server', msg);
     }
 
-    function displayBuses(buses){
-      for (let bus of buses){
-
+    function displayBuses(buses) {
+      for (let bus of buses) {
         const busIdStr = '' + bus.busId;
-
         let marker = busMarkers[busIdStr];
-        if (!marker){
+        if (!marker) {
           log.debug(`Place new bus #${busIdStr} on the map. Route ${bus.route}`);
           marker = drawBusMarker([bus.lat, bus.lng], bus.route, bus.busId);
           busMarkers[busIdStr] = marker;
@@ -209,15 +205,15 @@
       const visibleBusIds = new Set(buses.map(bus => '' + bus.busId));
       const drivenAwayBusIds = Object.keys(busMarkers).filter(busId => !visibleBusIds.has(busId));
 
-      for (let busId of drivenAwayBusIds){
+      for (let busId of drivenAwayBusIds) {
         log.debug(`Bus #${busId} has driven out of the map.`);
         busMarkers[busId].remove();
         delete busMarkers[busId];
       }
     }
 
-    async function trackBuses(socket){
-      while (true){
+    async function trackBuses(socket) {
+      while (true) {
         const msgJSON = await waitForIncomeMsg(socket);
 
         try {
@@ -227,8 +223,8 @@
           continue;
         }
 
-        if (msgData.msgType == 'Buses'){
-          if (!validateServerUpdateMsg(msgData)){
+        if (msgData.msgType === 'Buses') {
+          if (!validateServerUpdateMsg(msgData)) {
             return;
           }
           log.debug('Receive bus positions update from server', msgData);
@@ -239,17 +235,17 @@
       }
     }
 
-    async function listenSocket(){
+    async function listenSocket() {
       const socket = new WebSocket(websocketAddress);
 
       await waitTillSocketOpen(socket);
 
       log.info('Websocket connection established');
 
-      const sendBoundsToServer = _.debounce(()=>{
+      const sendBoundsToServer = _.debounce(() => {
         const newBounds = map.getBounds();
         sendBounds(socket, newBounds);
-      }, 100)
+      }, 100);
 
       map.on('zoomend moveend', sendBoundsToServer);
       sendBoundsToServer();
@@ -261,25 +257,22 @@
       }
     }
 
-    async function listenSocketWithReconnects(){
-      while (true){
+    async function listenSocketWithReconnects() {
+      while (true) {
         try {
           await listenSocket();
-
-        } catch (error){
-          if (error instanceof WebsocketClosed){
+        } catch (error) {
+          if (error instanceof WebSocketClosed) {
             log.info('Connection lost. Try to reconnect in 1 sec.')
             await sleep(1000);
             continue;
           }
-
           throw error;
         }
       }
     }
 
     listenSocketWithReconnects();
-
   </script>
 </body>
 </html>
