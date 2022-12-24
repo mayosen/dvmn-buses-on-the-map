@@ -1,9 +1,18 @@
+import json
 import logging
 
 import trio
 from trio_websocket import serve_websocket, WebSocketRequest, ConnectionClosed
 
 logger = logging.getLogger("buses.server")
+
+test_data = {
+    "msgType": "Buses",
+    "buses": [
+        {"busId": "c790сс", "lat": 55.7500, "lng": 37.600, "route": "120"},
+        {"busId": "a134aa", "lat": 55.7494, "lng": 37.621, "route": "670к"},
+    ],
+}
 
 
 async def echo_server(request: WebSocketRequest):
@@ -14,7 +23,7 @@ async def echo_server(request: WebSocketRequest):
         try:
             message = await ws.get_message()
             logger.debug("Got message: %s", message)
-            await ws.send_message(message)
+            await ws.send_message(json.dumps(test_data))
         except ConnectionClosed:
             break
 
