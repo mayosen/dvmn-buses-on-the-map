@@ -43,7 +43,11 @@ async def main():
     async with trio.open_nursery() as nursery:
         nursery.start_soon(serve_websocket, echo_server, host, port, None)
         # TODO: Не нужно ли поставить задержку до развертывания сервера?
-        nursery.start_soon(bus_client, host, port)
+        # await trio.sleep(1)
+        nursery.start_soon(bus_client, host, port, "156", "156-0")
+        nursery.start_soon(bus_client, host, port, "796", "796-0")
+        nursery.start_soon(bus_client, host, port, "703", "703-0")
+        nursery.start_soon(bus_client, host, port, "542", "542-0")
 
 
 if __name__ == "__main__":

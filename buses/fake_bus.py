@@ -10,11 +10,10 @@ from buses.routes import get_route
 logger = logging.getLogger("buses.fake_bus")
 
 
-def bus_generator():
-    route = "156"
+def bus_generator(route: str, bus_id: str):
     message_template = {
-        "busId": "с790сс",
         "route": route,
+        "busId": bus_id,
         "lat": None,
         "lng": None
     }
@@ -28,12 +27,12 @@ def bus_generator():
         yield message_template
 
 
-async def bus_client(host: str, port: int):
+async def bus_client(host: str, port: int, route: str, bus_id: str):
     try:
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{host}:{port}") as ws:
             logger.debug("Established connection: %s", ws)
-            generator = bus_generator()
+            generator = bus_generator(route, bus_id)
 
             for message in generator:
                 await ws.send_message(json.dumps(message))
