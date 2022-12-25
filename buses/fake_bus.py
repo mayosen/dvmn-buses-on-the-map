@@ -10,7 +10,7 @@ from buses.routes import get_route
 logger = logging.getLogger("buses.fake_bus")
 
 
-def bus_generator(route: str, bus_id: str):
+def _generator(route: str, bus_id: str):
     message_template = {
         "route": route,
         "busId": bus_id,
@@ -18,26 +18,27 @@ def bus_generator(route: str, bus_id: str):
         "lng": None
     }
     coordinates = get_route(route)["coordinates"]
-    # TODO: Использовать бесконечный генератор
-    # generator = itertools.cycle(coordinates)
+    generator = itertools.cycle(coordinates)
 
-    for latitude, longitude in coordinates:
+    for latitude, longitude in generator:
         message_template["lat"] = latitude
         message_template["lng"] = longitude
         yield message_template
 
 
-async def bus_client(host: str, port: int, route: str, bus_id: str):
+async def run_bus(host: str, port: int, route: str, bus_id: str):
+    bus_logger = logger.getChild(f"bus-{bus_id}")
+    delay = 1
+
     try:
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{host}:{port}") as ws:
-            logger.debug("Established connection: %s", ws)
-            generator = bus_generator(route, bus_id)
+            bus_logger.debug("Established connection")
+            generator = _generator(route, bus_id)
 
             for message in generator:
                 await ws.send_message(json.dumps(message))
-                logger.debug("Sent message")
-                await trio.sleep(1)
+                await trio.sleep(delay)
 
     except OSError as e:
-        logger.error("Connection attempt failed: %s", e)
+        bus_logger.error("Connection attempt failed: %s", e)

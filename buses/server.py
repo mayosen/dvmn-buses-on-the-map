@@ -3,27 +3,47 @@ import logging
 
 import trio
 from trio_websocket import serve_websocket, WebSocketRequest, ConnectionClosed
-from buses.fake_bus import bus_client
+
+from buses.fake_bus import run_bus
+from routes import get_all_routes_names
 
 logger = logging.getLogger("buses.server")
-
-message = {
+message_template = {
     "msgType": "Buses",
     "buses": [],
 }
+buses = {}
 
 
-async def echo_server(request: WebSocketRequest):
+async def bus_server(request: WebSocketRequest):
     ws = await request.accept()
-    logger.debug("Established connection: %s", ws)
+    server_logger = logger.getChild(f"server-{ws._id}")
+    server_logger.debug("Established connection")
 
     while True:
         try:
             response = await ws.get_message()
             message = json.loads(response)
-            logger.debug("Got message: %s", message)
+            buses[message["busId"]] = message
         except ConnectionClosed:
+            server_logger.debug("Connection closed")
             break
+
+
+async def talk_to_browser(request: WebSocketRequest):
+    ws = await request.accept()
+    browser_logger = logger.getChild(f"browser-{ws._id}")
+    browser_logger.debug("Established connection")
+    delay = 1
+
+    while True:
+        try:
+            message_template["buses"] = list(buses.values())
+            await ws.send_message(json.dumps(message_template))
+        except ConnectionClosed:
+            browser_logger.debug("Connection closed")
+            break
+        await trio.sleep(delay)
 
 
 def parse_config():
@@ -38,16 +58,18 @@ async def main():
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
     host = "127.0.0.1"
-    port = 8080
+    bus_port = 8080
+    browser_port = 8000
 
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(serve_websocket, echo_server, host, port, None)
-        # TODO: Не нужно ли поставить задержку до развертывания сервера?
-        # await trio.sleep(1)
-        nursery.start_soon(bus_client, host, port, "156", "156-0")
-        nursery.start_soon(bus_client, host, port, "796", "796-0")
-        nursery.start_soon(bus_client, host, port, "703", "703-0")
-        nursery.start_soon(bus_client, host, port, "542", "542-0")
+    try:
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(serve_websocket, talk_to_browser, host, browser_port, None)
+            nursery.start_soon(serve_websocket, bus_server, host, bus_port, None)
+            await trio.sleep(0.1)
+            for bus in get_all_routes_names():
+                nursery.start_soon(run_bus, host, bus_port, bus, f"{bus}-0")
+    except KeyboardInterrupt:
+        logger.debug("Shutting down")
 
 
 if __name__ == "__main__":

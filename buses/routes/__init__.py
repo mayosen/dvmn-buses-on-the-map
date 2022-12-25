@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Iterable
 
 _folder = Path(__file__).parent
 
@@ -9,18 +10,24 @@ def _read_route(path: Path) -> dict:
         return json.load(file)
 
 
-def _load_routes():
-    # TODO: remove
+def _load_routes() -> dict:
     folder = Path(__file__).parent
-    raw_routes = folder.glob("**/*.json")
+    files = folder.glob("**/*.json")
     routes = {}
 
-    for raw in raw_routes:
-        route = _read_route(raw)
+    for file in files:
+        route = _read_route(file)
         routes[route["name"]] = route
 
     return routes
 
 
-def get_route(name: str):
-    return _read_route(_folder / f"{name}.json")
+_routes = _load_routes()
+
+
+def get_route(name: str) -> dict:
+    return _routes.get(name, None)
+
+
+def get_all_routes_names() -> Iterable[str]:
+    return _routes.keys()
