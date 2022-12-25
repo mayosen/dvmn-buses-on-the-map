@@ -7,7 +7,7 @@ def _read_route(path: Path) -> dict:
         return json.load(file)
 
 
-def _load():
+def _load_routes():
     folder = Path(__file__).parent
     raw_routes = folder.glob("**/*.json")
     routes = {}
@@ -19,4 +19,8 @@ def _load():
     return routes
 
 
-ROUTES = _load()
+_routes = _load_routes()
+
+
+def get_route(name: str):
+    return _routes.get(name, None)

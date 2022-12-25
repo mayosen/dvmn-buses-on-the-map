@@ -3,35 +3,27 @@ import logging
 
 import trio
 from trio_websocket import serve_websocket, WebSocketRequest, ConnectionClosed
-from routes import ROUTES
+from buses.fake_bus import bus_client
 
 logger = logging.getLogger("buses.server")
 
-bus = {
-    "busId": "а982ан", "lat": None, "lng": None, "route": "156"
-}
-
 message = {
     "msgType": "Buses",
-    "buses": [bus],
+    "buses": [],
 }
 
 
 async def echo_server(request: WebSocketRequest):
     ws = await request.accept()
     logger.debug("Established connection: %s", ws)
-    route: dict = ROUTES.get("156")
 
-    for coordinates in route["coordinates"]:
+    while True:
         try:
-            bus["lat"] = coordinates[0]
-            bus["lng"] = coordinates[1]
-            payload = json.dumps(message)
-            logger.debug("Sending payload: %s", payload)
-            await ws.send_message(payload)
+            response = await ws.get_message()
+            message = json.loads(response)
+            logger.debug("Got message: %s", message)
         except ConnectionClosed:
             break
-        await trio.sleep(0.1)
 
 
 def parse_config():
@@ -40,13 +32,18 @@ def parse_config():
 
 async def main():
     logging.basicConfig(
-        format=u"%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        format=u"%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s - %(message)s",
         level=logging.DEBUG,
         datefmt="%H:%M:%S",
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
+    host = "127.0.0.1"
+    port = 8080
 
-    await serve_websocket(echo_server, "127.0.0.1", 8000, ssl_context=None)
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(serve_websocket, echo_server, host, port, None)
+        # TODO: Не нужно ли поставить задержку до развертывания сервера?
+        nursery.start_soon(bus_client, host, port)
 
 
 if __name__ == "__main__":
