@@ -29,5 +29,5 @@ def get_route(name: str) -> dict:
     return _routes.get(name, None)
 
 
-def get_all_routes_names() -> Iterable[str]:
+def get_all_route_names() -> Iterable[str]:
     return _routes.keys()

@@ -6,7 +6,7 @@ import trio
 from trio_websocket import serve_websocket, WebSocketRequest, ConnectionClosed
 
 from buses.fake_bus import run_bus
-from routes import get_all_routes_names
+from routes import get_all_route_names
 
 logger = logging.getLogger("buses.server")
 message_template = {
@@ -68,10 +68,10 @@ async def main():
             nursery.start_soon(serve_websocket, bus_server, host, bus_port, None)
             await trio.sleep(0.1)
             buses_generated = 0
-            for route in get_all_routes_names():
-                buses = randint(1, 5)
-                logger.debug("Generating %d buses on route %s", buses, route)
-                for index in range(1, buses + 1):
+            for route in get_all_route_names():
+                buses_number = randint(1, 15)
+                logger.debug("Generating %d buses on route %s", buses_number, route)
+                for index in range(1, buses_number + 1):
                     buses_generated += 1
                     nursery.start_soon(run_bus, host, bus_port, route, index)
             logger.debug("Totally generated %d buses", buses_generated)

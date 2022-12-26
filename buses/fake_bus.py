@@ -11,10 +11,6 @@ from buses.routes import get_route
 logger = logging.getLogger("buses.fake_bus")
 
 
-def _generate_bus_id(route: str, index: int):
-    return f"{route}:{index}"
-
-
 def _bus_generator(route: str, bus_id: str):
     message_template = {
         "route": route,
@@ -23,13 +19,17 @@ def _bus_generator(route: str, bus_id: str):
         "lng": None
     }
     coordinates = get_route(route)["coordinates"]
-    skip = randint(1, len(coordinates))
+    skip = randint(0, len(coordinates) - 1)
     generator = islice(cycle(coordinates), skip, None)
 
     for latitude, longitude in generator:
         message_template["lat"] = latitude
         message_template["lng"] = longitude
         yield message_template
+
+
+def _generate_bus_id(route: str, index: int):
+    return f"{route}:{index}"
 
 
 async def run_bus(host: str, port: int, route: str, index: int):
