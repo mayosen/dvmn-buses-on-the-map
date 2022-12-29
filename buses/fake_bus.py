@@ -3,12 +3,15 @@ import logging
 from argparse import ArgumentParser
 from collections import deque
 from dataclasses import dataclass
+from functools import wraps
 from itertools import cycle, islice
 from math import ceil
 from random import randint, random
+from typing import Callable, Awaitable
 
 import trio
-from trio_websocket import WebSocketConnection, open_websocket_url, ConnectionClosed
+from exceptiongroup import catch, ExceptionGroup
+from trio_websocket import WebSocketConnection, open_websocket_url, ConnectionClosed, HandshakeError
 
 from buses.routes import get_route, get_all_route_names
 
@@ -92,12 +95,13 @@ async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logg
                     gateway_logger.debug("Sent update")
                     await trio.sleep(config.refresh_timeout)
 
-                except ConnectionClosed as e:
-                    gateway_logger.error("Connection closed: %s", e)
-                    break
+                except ConnectionClosed:
+                    gateway_logger.error("Connection closed")
+                    raise
 
-    except OSError as e:
-        gateway_logger.error("Connection attempt failed: %s", e)
+    except HandshakeError:
+        gateway_logger.error("Connection attempt failed")
+        raise
 
 
 async def open_gateway(config: Config, routes: list[str], index: int):
@@ -117,7 +121,34 @@ async def open_gateway(config: Config, routes: list[str], index: int):
         nursery.start_soon(send_updates, config, buses, gateway_logger)
 
 
-async def main():
+def relaunch_on_disconnect(func: Callable[..., Awaitable]):
+    timeout = 5
+
+    def handle(group: ExceptionGroup):
+        logger.debug("Handled errors: %s", group)
+
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        while True:
+            with catch({
+                ConnectionClosed: handle,
+                HandshakeError: handle,
+            }):
+                await func(*args, **kwargs)
+            logger.debug("Sleeping %ds before relaunching", timeout)
+            await trio.sleep(timeout)
+
+    return wrapper
+
+
+@relaunch_on_disconnect
+async def imitate(config: Config, route_pairs: list[tuple[int, list[str]]]):
+    async with trio.open_nursery() as nursery:
+        for index, gateway_routes in route_pairs:
+            nursery.start_soon(open_gateway, config, gateway_routes, index)
+
+
+def main():
     config = parse_config()
     logging.basicConfig(
         format=u"%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s - %(message)s",
@@ -128,20 +159,19 @@ async def main():
 
     routes = deque(get_all_route_names()[:config.routes_number])
     routes_per_gateway = ceil(config.routes_number / config.websockets_number)
+    route_pairs: list[tuple[int, list[str]]] = []
+
+    for index in range(config.websockets_number):
+        gateway_routes = []
+        while len(gateway_routes) < routes_per_gateway and len(routes) > 0:
+            gateway_routes.append(routes.popleft())
+        route_pairs.append((index, gateway_routes))
 
     try:
-        async with trio.open_nursery() as nursery:
-            for index in range(1, config.websockets_number + 1):
-                gateway_routes = []
-
-                while len(gateway_routes) <= routes_per_gateway and len(routes) > 0:
-                    gateway_routes.append(routes.popleft())
-
-                nursery.start_soon(open_gateway, config, gateway_routes, index)
-
+        trio.run(imitate, config, route_pairs)
     except KeyboardInterrupt:
         logger.debug("Shutting down")
 
 
 if __name__ == "__main__":
-    trio.run(main)
+    main()
