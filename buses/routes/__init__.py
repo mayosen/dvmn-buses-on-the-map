@@ -13,19 +13,23 @@ def _load_paths() -> dict[str, Path]:
     return paths
 
 
-_route_paths = _load_paths()
-
-
-def _read_route(path: Path) -> dict[str, Any]:
-    with open(path, "r", encoding="utf8") as file:
-        return json.load(file)
-
-
-def get_route(name: str) -> dict[str, Any]:
-    return _read_route(_route_paths.get(name))
+_paths = _load_paths()
+_cache = {}
 
 
 def get_route_names(limit: int) -> Iterable[str]:
     if limit == 0:
         limit = None
-    return islice(_route_paths.keys(), limit)
+    return islice(_paths.keys(), limit)
+
+
+def _read_route(name: str) -> dict[str, Any]:
+    path = _paths[name]
+    with open(path, "r", encoding="utf8") as file:
+        route = json.load(file)
+        _cache[name] = route
+        return route
+
+
+def get_route(name: str) -> dict[str, Any]:
+    return _cache.get(name, None) or _read_route(name)
