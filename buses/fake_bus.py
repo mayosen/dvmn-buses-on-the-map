@@ -10,8 +10,8 @@ from random import randint, random
 from typing import Callable, Awaitable, Any, Generator
 
 import trio
-from exceptiongroup import catch, ExceptionGroup
-from trio_websocket import WebSocketConnection, open_websocket_url, ConnectionClosed, HandshakeError
+from exceptiongroup import ExceptionGroup, catch
+from trio_websocket import WebSocketConnection, ConnectionClosed, HandshakeError, open_websocket_url
 
 from buses.routes import get_route, get_route_names
 
@@ -87,11 +87,11 @@ async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logg
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{config.host}:{config.port}") as ws:
             gateway_logger.debug("Established connection")
+
             while True:
                 try:
                     updates = list(buses.values())
-                    message = json.dumps(updates)
-                    await ws.send_message(message)
+                    await ws.send_message(json.dumps(updates))
                     gateway_logger.debug("Sent update")
                     await trio.sleep(config.refresh_timeout)
 

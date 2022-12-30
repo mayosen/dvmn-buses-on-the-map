@@ -2,7 +2,7 @@ import json
 import logging
 
 import trio
-from trio_websocket import serve_websocket, WebSocketRequest, ConnectionClosed
+from trio_websocket import WebSocketRequest, ConnectionClosed, serve_websocket
 
 logger = logging.getLogger("server")
 message_template = {
@@ -42,6 +42,7 @@ async def talk_to_browser(request: WebSocketRequest):
             await ws.send_message(json.dumps(message_template))
             browser_logger.debug("Sent update")
             await trio.sleep(delay)
+
         except ConnectionClosed:
             browser_logger.debug("Connection closed")
             break

@@ -24,8 +24,7 @@ def get_route_names(limit: int) -> Iterable[str]:
 
 
 def _read_route(name: str) -> dict[str, Any]:
-    path = _paths[name]
-    with open(path, "r", encoding="utf8") as file:
+    with open(_paths[name], "r", encoding="utf8") as file:
         route = json.load(file)
         _cache[name] = route
         return route
