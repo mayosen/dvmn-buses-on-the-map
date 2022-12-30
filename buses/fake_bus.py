@@ -7,13 +7,13 @@ from functools import wraps
 from itertools import cycle, islice
 from math import ceil
 from random import randint, random
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Any, Generator
 
 import trio
 from exceptiongroup import catch, ExceptionGroup
 from trio_websocket import WebSocketConnection, open_websocket_url, ConnectionClosed, HandshakeError
 
-from buses.routes import get_route, get_all_route_names
+from buses.routes import get_route, get_route_names
 
 logger = logging.getLogger("fake_bus")
 
@@ -49,7 +49,7 @@ def parse_config() -> Config:
     )
 
 
-def bus_generator(route: str, bus_id: str):
+def bus_generator(route: str, bus_id: str) -> Generator[dict[str, Any], None, None]:
     update_template = {
         "route": route,
         "busId": bus_id,
@@ -57,8 +57,8 @@ def bus_generator(route: str, bus_id: str):
         "lng": None
     }
     coordinates = get_route(route)["coordinates"]
-    skip = randint(0, len(coordinates) - 1)
-    generator = islice(cycle(coordinates), skip, None)
+    shift = randint(0, len(coordinates) - 1)
+    generator = islice(cycle(coordinates), shift, None)
 
     for latitude, longitude in generator:
         update_template["lat"] = latitude
@@ -157,7 +157,7 @@ def main():
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
 
-    routes = deque(get_all_route_names()[:config.routes_number])
+    routes = deque(get_route_names(config.routes_number))
     routes_per_gateway = ceil(config.routes_number / config.websockets_number)
     route_pairs: list[tuple[int, list[str]]] = []
 

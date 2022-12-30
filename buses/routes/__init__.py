@@ -1,33 +1,31 @@
 import json
+from itertools import islice
 from pathlib import Path
-from typing import Iterable
-
-_folder = Path(__file__).parent
+from typing import Iterable, Any
 
 
-def _read_route(path: Path) -> dict:
+def _load_paths() -> dict[str, Path]:
+    folder = Path(__file__).parent
+    files = folder.glob("**/*.json")
+    paths = {}
+    for file in files:
+        paths[file.name.removesuffix(".json")] = file
+    return paths
+
+
+_route_paths = _load_paths()
+
+
+def _read_route(path: Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf8") as file:
         return json.load(file)
 
 
-def _load_routes() -> dict:
-    folder = Path(__file__).parent
-    files = folder.glob("**/*.json")
-    routes = {}
-
-    for file in files:
-        route = _read_route(file)
-        routes[route["name"]] = route
-
-    return routes
+def get_route(name: str) -> dict[str, Any]:
+    return _read_route(_route_paths.get(name))
 
 
-_routes = _load_routes()
-
-
-def get_route(name: str) -> dict:
-    return _routes.get(name, None)
-
-
-def get_all_route_names() -> list[str]:
-    return list(_routes.keys())
+def get_route_names(limit: int) -> Iterable[str]:
+    if limit == 0:
+        limit = None
+    return islice(_route_paths.keys(), limit)
