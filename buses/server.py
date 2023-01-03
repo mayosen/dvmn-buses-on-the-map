@@ -1,18 +1,64 @@
-import json
+from dataclasses import dataclass
+
+import jsons
 import logging
 
 import trio
 from trio_websocket import WebSocketRequest, WebSocketConnection, ConnectionClosed, serve_websocket
-
-Bounds = dict[str, float]
-Bus = dict[str, str | float]
 
 logger = logging.getLogger("server")
 message_template = {
     "msgType": "Buses",
     "buses": [],
 }
-buses: dict[str, Bus] = {}
+buses: dict[str, "Bus"] = {}
+
+
+@dataclass(frozen=True)
+class Bus:
+    route: str
+    bus_id: str
+    latitude: float
+    longitude: float
+
+    @staticmethod
+    def serialize(obj: "Bus", **kwargs):
+        return {
+            "route": obj.route,
+            "busId": obj.bus_id,
+            "lat": obj.latitude,
+            "lng": obj.longitude,
+        }
+
+    @staticmethod
+    def deserialize(obj: dict[str, str | float], cls: type, **kwargs):
+        route = obj.get("route")
+        bus_id = obj.get("busId")
+        latitude = obj.get("lat")
+        longitude = obj.get("lng")
+        return Bus(route, bus_id, latitude, longitude)
+
+
+@dataclass
+class WindowBounds:
+    south_latitude: float | None = None
+    north_latitude: float | None = None
+    west_longitude: float | None = None
+    east_longitude: float | None = None
+    exists: bool = False
+
+    def update(self, bounds: dict):
+        self.south_latitude = bounds.get("south_lat")
+        self.north_latitude = bounds.get("north_lat")
+        self.west_longitude = bounds.get("west_lng")
+        self.east_longitude = bounds.get("east_lng")
+        self.exists = True
+
+    def is_inside(self, bus: Bus) -> bool:
+        return (
+            self.south_latitude <= bus.latitude <= self.north_latitude
+            and self.west_longitude <= bus.longitude <= self.east_longitude
+        )
 
 
 async def serve_gateway(request: WebSocketRequest):
@@ -22,47 +68,36 @@ async def serve_gateway(request: WebSocketRequest):
     while True:
         try:
             message = await ws.get_message()
-            updates: list[Bus] = json.loads(message)
-            gateway_logger.debug("Got update")
+            bus_updates = jsons.loads(message, cls=list[Bus], strict=True)
+            gateway_logger.debug("Got update buses")
 
-            for update in updates:
-                buses[update["busId"]] = update
+            for bus in bus_updates:
+                buses[bus.bus_id] = bus
 
         except ConnectionClosed:
             gateway_logger.debug("Connection closed")
             break
 
 
-def is_inside(bus: Bus, bounds: Bounds) -> bool:
-    return (
-        bounds["south_lat"] <= bus["lat"] <= bounds["north_lat"]
-        and bounds["west_lng"] <= bus["lng"] <= bounds["east_lng"]
-    )
-
-
-async def send_browser_updates(ws: WebSocketConnection, bounds: Bounds, browser_logger: logging.Logger):
+async def send_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, browser_logger: logging.Logger):
     delay = 1
 
-    def filter_buses() -> list[Bus]:
-        # Пока браузер не пришлет границы, отвечаем пустым списком
-        if len(bounds) == 4:
-            return list(filter(lambda bus: is_inside(bus, bounds), buses.values()))
-        else:
-            browser_logger.debug("No bounds, empty response")
-            return []
-
     while True:
-        buses_inside = filter_buses()
-        message_template["buses"] = buses_inside
-        await ws.send_message(json.dumps(message_template))
-        browser_logger.debug("Sent update with %d buses", len(buses_inside))
+        if bounds.exists:
+            buses_inside = list(filter(bounds.is_inside, buses.values()))
+            message_template["buses"] = buses_inside
+            await ws.send_message(jsons.dumps(message_template, strict=True))
+            browser_logger.debug("Sent update with %d buses", len(buses_inside))
+        else:
+            browser_logger.debug("Bounds not exists, skipping update")
+
         await trio.sleep(delay)
 
 
-async def listen_browser_updates(ws: WebSocketConnection, bounds: Bounds, browser_logger: logging.Logger):
+async def listen_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, browser_logger: logging.Logger):
     while True:
         message = await ws.get_message()
-        update = json.loads(message)
+        update = jsons.loads(message)
         bounds.update(update["data"])
         browser_logger.debug("Bounds updated")
 
@@ -71,12 +106,13 @@ async def serve_browser(request: WebSocketRequest):
     ws = await request.accept()
     browser_logger = logger.getChild(f"browser-{ws._id}")
     browser_logger.debug("Established connection")
-    bounds = {}
+    bounds = WindowBounds()
 
     try:
         async with trio.open_nursery() as nursery:
             nursery.start_soon(send_browser_updates, ws, bounds, browser_logger)
             nursery.start_soon(listen_browser_updates, ws, bounds, browser_logger)
+
     except ConnectionClosed:
         browser_logger.debug("Connection closed")
 
@@ -93,6 +129,9 @@ async def main():
         datefmt="%H:%M:%S",
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
+
+    jsons.set_serializer(Bus.serialize, Bus)
+    jsons.set_deserializer(Bus.deserialize, Bus)
 
     host = "127.0.0.1"
     browser_port = 8000
