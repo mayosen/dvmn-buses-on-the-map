@@ -7,7 +7,7 @@ from functools import wraps
 from itertools import cycle, islice
 from math import ceil
 from random import randint, random
-from typing import Callable, Awaitable, Any, Generator
+from typing import Callable, Awaitable, Generator, Union
 
 import trio
 from exceptiongroup import ExceptionGroup, catch
@@ -15,6 +15,8 @@ from trio_websocket import WebSocketConnection, ConnectionClosed, HandshakeError
 
 from buses.routes import get_route, get_route_names
 
+GatewayRoutes = tuple[int, list[str]]
+Update = dict[str, Union[str, float]]
 logger = logging.getLogger("fake_bus")
 
 
@@ -49,7 +51,7 @@ def parse_config() -> Config:
     )
 
 
-def bus_generator(route: str, bus_id: str) -> Generator[dict[str, Any], None, None]:
+def bus_generator(route: str, bus_id: str) -> Generator[Update, None, None]:
     update_template = {
         "route": route,
         "busId": bus_id,
@@ -66,20 +68,19 @@ def bus_generator(route: str, bus_id: str) -> Generator[dict[str, Any], None, No
         yield update_template
 
 
-async def run_bus(send_channel: trio.abc.SendChannel, route: str, index: int, emulator_id: str):
+async def run_bus(send_channel: trio.abc.SendChannel[Update], route: str, index: int, emulator_id: str):
     prefix = f"{emulator_id}-" if emulator_id else ""
     bus_id = f"{prefix}{route}-{index}"
     generator = bus_generator(route, bus_id)
 
-    for message in generator:
-        await send_channel.send(json.dumps(message))
+    for update in generator:
+        await send_channel.send(update)
         await trio.sleep(1 + random())
 
 
-async def receive_updates(receive_channel: trio.abc.ReceiveChannel, buses: dict):
+async def receive_updates(receive_channel: trio.abc.ReceiveChannel[Update], buses: dict):
     async for update in receive_channel:
-        message = json.loads(update)
-        buses[message["busId"]] = message
+        buses[update["busId"]] = update
 
 
 async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logger):
@@ -104,7 +105,7 @@ async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logg
         raise
 
 
-async def open_gateway(config: Config, routes: list[str], index: int):
+async def open_gateway(config: Config, index: int, routes: list[str]):
     gateway_logger = logger.getChild(f"gateway-{index}")
     send_channel, receive_channel = trio.open_memory_channel(0)
     buses = {}
@@ -142,10 +143,24 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
 
 
 @relaunch_on_disconnect
-async def imitate(config: Config, route_pairs: list[tuple[int, list[str]]]):
+async def imitate(config: Config, gateway_routes: list[GatewayRoutes]):
     async with trio.open_nursery() as nursery:
-        for index, gateway_routes in route_pairs:
-            nursery.start_soon(open_gateway, config, gateway_routes, index)
+        for index, routes in gateway_routes:
+            nursery.start_soon(open_gateway, config, index, routes)
+
+
+def distribute_routes(routes_number: int, websockets_number: int) -> list[GatewayRoutes]:
+    route_names = deque(get_route_names(routes_number))
+    routes_per_gateway = ceil(routes_number / websockets_number)
+    gateway_routes: list[GatewayRoutes] = []
+
+    for index in range(websockets_number):
+        routes = []
+        while len(routes) < routes_per_gateway and len(route_names) > 0:
+            routes.append(route_names.popleft())
+        gateway_routes.append((index, routes))
+
+    return gateway_routes
 
 
 def main():
@@ -157,18 +172,10 @@ def main():
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
 
-    routes = deque(get_route_names(config.routes_number))
-    routes_per_gateway = ceil(config.routes_number / config.websockets_number)
-    route_pairs: list[tuple[int, list[str]]] = []
-
-    for index in range(config.websockets_number):
-        gateway_routes = []
-        while len(gateway_routes) < routes_per_gateway and len(routes) > 0:
-            gateway_routes.append(routes.popleft())
-        route_pairs.append((index, gateway_routes))
+    gateway_routes = distribute_routes(config.routes_number, config.websockets_number)
 
     try:
-        trio.run(imitate, config, route_pairs)
+        trio.run(imitate, config, gateway_routes)
     except KeyboardInterrupt:
         logger.debug("Shutting down")
 
