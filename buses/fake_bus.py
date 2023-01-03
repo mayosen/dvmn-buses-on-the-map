@@ -1,4 +1,3 @@
-import json
 import logging
 from argparse import ArgumentParser
 from collections import deque
@@ -9,6 +8,7 @@ from math import ceil
 from random import randint, random
 from typing import Callable, Awaitable, Generator, Union
 
+import jsons
 import trio
 from exceptiongroup import ExceptionGroup, catch
 from trio_websocket import WebSocketConnection, ConnectionClosed, HandshakeError, open_websocket_url
@@ -92,7 +92,7 @@ async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logg
             while True:
                 try:
                     updates = list(buses.values())
-                    await ws.send_message(json.dumps(updates))
+                    await ws.send_message(jsons.dumps(updates))
                     gateway_logger.debug("Sent update")
                     await trio.sleep(config.refresh_timeout)
 
@@ -163,7 +163,7 @@ def distribute_routes(routes_number: int, websockets_number: int) -> list[Gatewa
     return gateway_routes
 
 
-def main():
+async def main():
     config = parse_config()
     logging.basicConfig(
         format=u"%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s - %(message)s",
@@ -175,10 +175,10 @@ def main():
     gateway_routes = distribute_routes(config.routes_number, config.websockets_number)
 
     try:
-        trio.run(imitate, config, gateway_routes)
+        await imitate(config, gateway_routes)
     except KeyboardInterrupt:
         logger.debug("Shutting down")
 
 
 if __name__ == "__main__":
-    main()
+    trio.run(main)

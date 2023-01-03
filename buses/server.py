@@ -1,8 +1,8 @@
+import logging
+from argparse import ArgumentParser
 from dataclasses import dataclass
 
 import jsons
-import logging
-
 import trio
 from trio_websocket import WebSocketRequest, WebSocketConnection, ConnectionClosed, serve_websocket
 
@@ -12,6 +12,25 @@ message_template = {
     "buses": [],
 }
 buses: dict[str, "Bus"] = {}
+
+
+@dataclass(frozen=True)
+class Config:
+    host: str
+    bus_port: int
+    browser_port: int
+    debug: bool
+
+
+def parse_config() -> Config:
+    parser = ArgumentParser()
+    parser.add_argument("--host", type=str, help="Server host", default="127.0.0.1")
+    parser.add_argument("--bus_port", type=int, help="Buses gateway port", default=8080)
+    parser.add_argument("--browser_port", type=int, help="Client browsers port", default=8000)
+    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    return Config(args.host, args.bus_port, args.browser_port, args.debug)
 
 
 @dataclass(frozen=True)
@@ -117,15 +136,11 @@ async def serve_browser(request: WebSocketRequest):
         browser_logger.debug("Connection closed")
 
 
-def parse_config():
-    # TODO
-    pass
-
-
 async def main():
+    config = parse_config()
     logging.basicConfig(
         format=u"%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s - %(message)s",
-        level=logging.DEBUG,
+        level=logging.DEBUG if config.debug else logging.INFO,
         datefmt="%H:%M:%S",
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
@@ -133,15 +148,10 @@ async def main():
     jsons.set_serializer(Bus.serialize, Bus)
     jsons.set_deserializer(Bus.deserialize, Bus)
 
-    host = "127.0.0.1"
-    browser_port = 8000
-    gateway_port = 8080
-
     try:
         async with trio.open_nursery() as nursery:
-            nursery.start_soon(serve_websocket, serve_gateway, host, gateway_port, None)
-            nursery.start_soon(serve_websocket, serve_browser, host, browser_port, None)
-
+            nursery.start_soon(serve_websocket, serve_gateway, config.host, config.bus_port, None)
+            nursery.start_soon(serve_websocket, serve_browser, config.host, config.browser_port, None)
     except KeyboardInterrupt:
         logger.debug("Shutting down")
 
