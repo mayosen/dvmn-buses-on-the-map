@@ -87,7 +87,7 @@ async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logg
     try:
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{config.host}:{config.port}") as ws:
-            gateway_logger.debug("Established connection")
+            gateway_logger.info("Established connection")
 
             while True:
                 try:
@@ -97,11 +97,11 @@ async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logg
                     await trio.sleep(config.refresh_timeout)
 
                 except ConnectionClosed:
-                    gateway_logger.error("Connection closed")
+                    gateway_logger.info("Connection closed")
                     raise
 
     except HandshakeError:
-        gateway_logger.error("Connection attempt failed")
+        gateway_logger.info("Connection attempt failed")
         raise
 
 
@@ -117,7 +117,7 @@ async def open_gateway(config: Config, index: int, routes: list[str]):
                 nursery.start_soon(run_bus, send_channel, route, bus_index, config.emulator_id)
                 buses_generated += 1
 
-        gateway_logger.debug("Generated %d buses", buses_generated)
+        gateway_logger.info("Generated %d buses", buses_generated)
         nursery.start_soon(receive_updates, receive_channel, buses)
         nursery.start_soon(send_updates, config, buses, gateway_logger)
 
@@ -126,7 +126,7 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
     timeout = 5
 
     def handle(group: ExceptionGroup):
-        logger.debug("Handled errors: %s", group)
+        logger.info("Handled errors: %s", group)
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
@@ -136,7 +136,7 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
                 HandshakeError: handle,
             }):
                 await func(*args, **kwargs)
-            logger.debug("Sleeping %ds before relaunching", timeout)
+            logger.info("Sleeping %ds before relaunching", timeout)
             await trio.sleep(timeout)
 
     return wrapper
@@ -177,7 +177,7 @@ async def main():
     try:
         await imitate(config, gateway_routes)
     except KeyboardInterrupt:
-        logger.debug("Shutting down")
+        logger.info("Shutting down")
 
 
 if __name__ == "__main__":
