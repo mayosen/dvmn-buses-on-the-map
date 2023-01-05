@@ -6,18 +6,18 @@ from functools import wraps
 from itertools import cycle, islice
 from math import ceil
 from random import randint, random
-from typing import Callable, Awaitable, Generator, Union
+from typing import Callable, Awaitable, Iterable
 
 import jsons
 import trio
 from exceptiongroup import ExceptionGroup, catch
 from trio_websocket import WebSocketConnection, ConnectionClosed, HandshakeError, open_websocket_url
 
+from buses.models import Bus, Message
 from buses.routes import get_route, get_route_names
 
 GatewayRoutes = tuple[int, list[str]]
-Update = dict[str, Union[str, float]]
-logger = logging.getLogger("fake_bus")
+module_logger = logging.getLogger("fake_bus")
 
 
 @dataclass(frozen=True)
@@ -51,74 +51,66 @@ def parse_config() -> Config:
     )
 
 
-def bus_generator(route: str, bus_id: str) -> Generator[Update, None, None]:
-    update_template = {
-        "route": route,
-        "busId": bus_id,
-        "lat": None,
-        "lng": None
-    }
+def coordinates_generator(route: str) -> Iterable[tuple[float, float]]:
     coordinates = get_route(route)["coordinates"]
     shift = randint(0, len(coordinates) - 1)
-    generator = islice(cycle(coordinates), shift, None)
-
-    for latitude, longitude in generator:
-        update_template["lat"] = latitude
-        update_template["lng"] = longitude
-        yield update_template
+    return islice(cycle(coordinates), shift, None)
 
 
-async def run_bus(send_channel: trio.abc.SendChannel[Update], route: str, index: int, emulator_id: str):
+async def run_bus(buses: list[Bus], route: str, index: int, emulator_id: str):
     prefix = f"{emulator_id}-" if emulator_id else ""
-    bus_id = f"{prefix}{route}-{index}"
-    generator = bus_generator(route, bus_id)
+    bus = Bus(route, f"{prefix}{route}-{index}")
+    buses.append(bus)
 
-    for update in generator:
-        await send_channel.send(update)
+    for latitude, longitude in coordinates_generator(route):
+        bus.latitude = latitude
+        bus.longitude = longitude
+        # await send_channel.send(bus)
         await trio.sleep(1 + random())
 
 
-async def receive_updates(receive_channel: trio.abc.ReceiveChannel[Update], buses: dict):
-    async for update in receive_channel:
-        buses[update["busId"]] = update
+async def receive_updates(receive_channel: trio.abc.ReceiveChannel[Bus], buses: dict[str, Bus]):
+    # TODO: Есть ли смысл переприсваивать? Объекты и так обновляются...
+    async for bus in receive_channel:
+        buses[bus.bus_id] = bus
 
 
-async def send_updates(config: Config, buses: dict, gateway_logger: logging.Logger):
+async def send_updates(config: Config, buses: list[Bus], logger: logging.Logger):
     try:
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{config.host}:{config.port}") as ws:
-            gateway_logger.info("Established connection")
+            logger.info("Established connection")
 
             while True:
                 try:
-                    updates = list(buses.values())
-                    await ws.send_message(jsons.dumps(updates))
-                    gateway_logger.debug("Sent update")
+                    message = Message.buses(buses)
+                    await ws.send_message(jsons.dumps(message, strict=True))
+                    logger.debug("Sent update")
                     await trio.sleep(config.refresh_timeout)
 
                 except ConnectionClosed:
-                    gateway_logger.info("Connection closed")
+                    logger.info("Connection closed")
                     raise
 
     except HandshakeError:
-        gateway_logger.info("Connection attempt failed")
+        logger.info("Connection attempt failed")
         raise
 
 
 async def open_gateway(config: Config, index: int, routes: list[str]):
-    gateway_logger = logger.getChild(f"gateway-{index}")
-    send_channel, receive_channel = trio.open_memory_channel(0)
-    buses = {}
+    gateway_logger = module_logger.getChild(f"gateway-{index}")
+    # send_channel, receive_channel = trio.open_memory_channel(0)
+    buses = []
     buses_generated = 0
 
     async with trio.open_nursery() as nursery:
         for route in routes:
             for bus_index in range(1, config.buses_per_route + 1):
-                nursery.start_soon(run_bus, send_channel, route, bus_index, config.emulator_id)
+                nursery.start_soon(run_bus, buses, route, bus_index, config.emulator_id)
                 buses_generated += 1
 
         gateway_logger.info("Generated %d buses", buses_generated)
-        nursery.start_soon(receive_updates, receive_channel, buses)
+        # nursery.start_soon(receive_updates, receive_channel, buses)
         nursery.start_soon(send_updates, config, buses, gateway_logger)
 
 
@@ -126,7 +118,7 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
     timeout = 5
 
     def handle(group: ExceptionGroup):
-        logger.info("Handled errors: %s", group)
+        module_logger.info("Handled errors: %s", group)
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
@@ -136,7 +128,7 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
                 HandshakeError: handle,
             }):
                 await func(*args, **kwargs)
-            logger.info("Sleeping %ds before relaunching", timeout)
+            module_logger.info("Sleeping %ds before relaunching", timeout)
             await trio.sleep(timeout)
 
     return wrapper
@@ -177,7 +169,7 @@ async def main():
     try:
         await imitate(config, gateway_routes)
     except KeyboardInterrupt:
-        logger.info("Shutting down")
+        module_logger.info("Shutting down")
 
 
 if __name__ == "__main__":

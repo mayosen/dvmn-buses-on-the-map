@@ -6,10 +6,10 @@ from typing import Iterable, Any
 
 def _load_paths() -> dict[str, Path]:
     folder = Path(__file__).parent
-    files = folder.glob("**/*.json")
+    routes = folder.glob("**/*.json")
     paths = {}
-    for file in files:
-        paths[file.name.removesuffix(".json")] = file
+    for route in routes:
+        paths[route.name.removesuffix(".json")] = route
     return paths
 
 
@@ -17,9 +17,7 @@ _paths = _load_paths()
 _cache = {}
 
 
-def get_route_names(limit: int) -> Iterable[str]:
-    if limit == 0:
-        limit = None
+def get_route_names(limit: int | None) -> Iterable[str]:
     return islice(_paths.keys(), limit)
 
 

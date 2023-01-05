@@ -4,10 +4,13 @@ from dataclasses import dataclass
 
 import jsons
 import trio
+from jsons import UnfulfilledArgumentError
 from trio_websocket import WebSocketRequest, WebSocketConnection, ConnectionClosed, serve_websocket
 
-logger = logging.getLogger("server")
-buses: dict[str, "Bus"] = {}
+from buses.models import Bus, Message, WindowBounds, MessageType
+
+module_logger = logging.getLogger("server")
+buses: dict[str, Bus] = {}
 
 
 @dataclass(frozen=True)
@@ -29,105 +32,81 @@ def parse_config() -> Config:
     return Config(args.host, args.bus_port, args.browser_port, args.debug)
 
 
-@dataclass(frozen=True)
-class Bus:
-    route: str
-    bus_id: str
-    latitude: float
-    longitude: float
-
-    @staticmethod
-    def serialize(obj: "Bus", **kwargs):
-        return {
-            "route": obj.route,
-            "busId": obj.bus_id,
-            "lat": obj.latitude,
-            "lng": obj.longitude,
-        }
-
-    @staticmethod
-    def deserialize(obj: dict[str, str | float], cls: type, **kwargs):
-        route = obj.get("route")
-        bus_id = obj.get("busId")
-        latitude = obj.get("lat")
-        longitude = obj.get("lng")
-        return Bus(route, bus_id, latitude, longitude)
-
-
-@dataclass
-class WindowBounds:
-    south_latitude: float | None = None
-    north_latitude: float | None = None
-    west_longitude: float | None = None
-    east_longitude: float | None = None
-    exists: bool = False
-
-    def update(self, bounds: dict):
-        self.south_latitude = bounds.get("south_lat")
-        self.north_latitude = bounds.get("north_lat")
-        self.west_longitude = bounds.get("west_lng")
-        self.east_longitude = bounds.get("east_lng")
-        self.exists = True
-
-    def is_inside(self, bus: Bus) -> bool:
-        return (
-            self.south_latitude <= bus.latitude <= self.north_latitude
-            and self.west_longitude <= bus.longitude <= self.east_longitude
-        )
+async def error_response(ws: WebSocketConnection, errors: list[str], logger: logging.Logger):
+    message = Message.errors(errors)
+    logger.info("Client errors: %s", errors)
+    await ws.send_message(jsons.dumps(message, strict=True))
 
 
 async def serve_gateway(request: WebSocketRequest):
     ws = await request.accept()
-    gateway_logger = logger.getChild(f"gateway-{ws._id}")
+    gateway_logger = module_logger.getChild(f"gateway-{ws._id}")
     gateway_logger.info("Established connection")
 
     while True:
+        # TODO: tests
         try:
             message = await ws.get_message()
-            bus_updates = jsons.loads(message, cls=list[Bus], strict=True)
-            gateway_logger.debug("Got buses update")
 
-            for bus in bus_updates:
-                buses[bus.bus_id] = bus
+            try:
+                message = jsons.loads(message, cls=Message, strict=True)
+
+                if message.message_type != MessageType.BUSES:
+                    await error_response(ws, ["Unsupported message type"], gateway_logger)
+                    continue
+
+                bus_updates = jsons.load(message.payload, cls=list[Bus], strict=True)
+                gateway_logger.debug("Got buses update")
+
+                for bus in bus_updates:
+                    buses[bus.bus_id] = bus
+
+            except UnfulfilledArgumentError as e:
+                await error_response(ws, [e.message], gateway_logger)
 
         except ConnectionClosed:
             gateway_logger.info("Connection closed")
             break
 
 
-def format_message(buses_: list[Bus]) -> dict:
-    return {
-        "msgType": "Buses",
-        "buses": buses_,
-    }
-
-
-async def send_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, browser_logger: logging.Logger):
+async def send_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, logger: logging.Logger):
     delay = 1
 
     while True:
         if bounds.exists:
             buses_inside = list(filter(bounds.is_inside, buses.values()))
-            message = format_message(buses_inside)
+            message = Message.buses(buses_inside)
             await ws.send_message(jsons.dumps(message, strict=True))
-            browser_logger.debug("Sent update with %d buses", len(buses_inside))
+            logger.debug("Sent update with %d buses", len(buses_inside))
         else:
-            browser_logger.debug("Bounds not exists, skipping update")
+            logger.debug("Bounds not exists, skipping update")
 
         await trio.sleep(delay)
 
 
-async def listen_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, browser_logger: logging.Logger):
+async def listen_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, logger: logging.Logger):
+    # TODO: tests
     while True:
         message = await ws.get_message()
-        update = jsons.loads(message)
-        bounds.update(update["data"])
-        browser_logger.debug("Got bounds update")
+
+        try:
+            update = jsons.loads(message, cls=Message, strict=True)
+
+            if update.message_type != MessageType.NEW_BOUNDS:
+                error = "Unsupported message type"
+                await error_response(ws, [error], logger)
+                continue
+
+            bounds.update(update.payload)
+            logger.debug("Got bounds update")
+
+        except UnfulfilledArgumentError as e:
+            await error_response(ws, [e.message], logger)
 
 
 async def serve_browser(request: WebSocketRequest):
     ws = await request.accept()
-    browser_logger = logger.getChild(f"browser-{ws._id}")
+    browser_logger = module_logger.getChild(f"browser-{ws._id}")
     browser_logger.info("Established connection")
     bounds = WindowBounds()
 
@@ -149,15 +128,13 @@ async def main():
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
 
-    jsons.set_serializer(Bus.serialize, Bus)
-    jsons.set_deserializer(Bus.deserialize, Bus)
-
     try:
         async with trio.open_nursery() as nursery:
             nursery.start_soon(serve_websocket, serve_gateway, config.host, config.bus_port, None)
             nursery.start_soon(serve_websocket, serve_browser, config.host, config.browser_port, None)
+
     except KeyboardInterrupt:
-        logger.info("Shutting down")
+        module_logger.info("Shutting down")
 
 
 if __name__ == "__main__":
