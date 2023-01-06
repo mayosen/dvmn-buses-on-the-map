@@ -3,10 +3,10 @@ from argparse import ArgumentParser
 from collections import deque
 from dataclasses import dataclass
 from functools import wraps
-from itertools import cycle, islice
+from itertools import islice
 from math import ceil
 from random import randint, random
-from typing import Callable, Awaitable, Iterable
+from typing import Callable, Awaitable, Iterable, Any, Collection, Generator
 
 import jsons
 import trio
@@ -14,9 +14,8 @@ from exceptiongroup import ExceptionGroup, catch
 from trio_websocket import WebSocketConnection, ConnectionClosed, HandshakeError, open_websocket_url
 
 from buses.models import Bus, Message
-from buses.routes import get_route, get_route_names
+from buses.routes import get_route_names, read_route
 
-GatewayRoutes = tuple[int, list[str]]
 module_logger = logging.getLogger("fake_bus")
 
 
@@ -31,48 +30,96 @@ class Config:
     refresh_timeout: float
     debug: bool
 
+    @classmethod
+    def parse(cls) -> "Config":
+        parser = ArgumentParser()
+        parser.add_argument("--host", type=str, help="Server host", default="127.0.0.1")
+        parser.add_argument("--port", type=int, help="Server port", default=8080)
+        parser.add_argument("--routes_number", type=int, help="Number of routes on the map", default=1)
+        parser.add_argument("--buses_per_route", type=int, help="Number of buses per route", default=1)
+        parser.add_argument("--websockets_number", type=int, help="Number of websocket gateways", default=1)
+        parser.add_argument("--emulator_id", type=str, help="Prefix for busId", default="")
+        parser.add_argument("--refresh_timeout", type=float, help="Delay between coordinates updates", default=1)
+        parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
+        args = parser.parse_args()
 
-def parse_config() -> Config:
-    parser = ArgumentParser()
-    parser.add_argument("--host", type=str, help="Server host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, help="Server port", default=8080)
-    parser.add_argument("--routes_number", type=int, help="Number of routes on the map", default=1)
-    parser.add_argument("--buses_per_route", type=int, help="Number of buses per route", default=1)
-    parser.add_argument("--websockets_number", type=int, help="Number of websocket gateways", default=1)
-    parser.add_argument("--emulator_id", type=str, help="Prefix for busId", default="")
-    parser.add_argument("--refresh_timeout", type=float, help="Delay in updating coordinates", default=1)
-    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
-    args = parser.parse_args()
-
-    return Config(
-        args.host, args.port,
-        args.routes_number, args.buses_per_route, args.websockets_number,
-        args.emulator_id, args.refresh_timeout, args.debug
-    )
+        return cls(
+            args.host, args.port,
+            args.routes_number, args.buses_per_route, args.websockets_number,
+            args.emulator_id, args.refresh_timeout, args.debug
+        )
 
 
-def coordinates_generator(route: str) -> Iterable[tuple[float, float]]:
-    coordinates = get_route(route)["coordinates"]
-    shift = randint(0, len(coordinates) - 1)
+class FakeBus(Bus):
+    def __init__(self, route: str, bus_id: str, generator: Iterable[tuple[float, float]]):
+        super().__init__(route, bus_id)
+        self.generator = iter(generator)
+        self.move()
+
+    def move(self):
+        latitude, longitude = next(self.generator)
+        self.latitude = latitude
+        self.longitude = longitude
+
+    async def run(self):
+        while True:
+            self.move()
+            await trio.sleep(1.5 + random() / 10)
+
+
+def cycle(sequence: Collection[Any]) -> Iterable[Any]:
+    """Цикл без копирования элементов исходной последовательности."""
+
+    while True:
+        for item in sequence:
+            yield item
+
+
+def coordinates_generator(coordinates: list[tuple[float, float]], shift: int) -> Iterable[tuple[float, float]]:
     return islice(cycle(coordinates), shift, None)
 
 
-async def run_bus(buses: list[Bus], route: str, index: int, emulator_id: str):
+def distribute_routes(routes_number: int, websockets_number: int) -> Generator[list[str], None, None]:
+    """Распределение маршрутов между шлюзами."""
+
+    routes = deque(get_route_names(routes_number))
+    routes_per_gateway = ceil(routes_number / websockets_number)
+
+    for _ in range(websockets_number):
+        gateway_routes = []
+        while len(gateway_routes) < routes_per_gateway and len(routes) > 0:
+            gateway_routes.append(routes.popleft())
+        yield gateway_routes
+
+
+def generate_bus_id(emulator_id: str, route: str, index: int) -> str:
     prefix = f"{emulator_id}-" if emulator_id else ""
-    bus = Bus(route, f"{prefix}{route}-{index}")
-    buses.append(bus)
-
-    for latitude, longitude in coordinates_generator(route):
-        bus.latitude = latitude
-        bus.longitude = longitude
-        # await send_channel.send(bus)
-        await trio.sleep(1 + random())
+    return f"{prefix}{route}-{index}"
 
 
-async def receive_updates(receive_channel: trio.abc.ReceiveChannel[Bus], buses: dict[str, Bus]):
-    # TODO: Есть ли смысл переприсваивать? Объекты и так обновляются...
-    async for bus in receive_channel:
-        buses[bus.bus_id] = bus
+def distribute_buses(config: Config) -> list[tuple[logging.Logger, list[FakeBus]]]:
+    """Распределение автобусов между шлюзами."""
+
+    routes_generator = distribute_routes(config.routes_number, config.websockets_number)
+    gateway_buses = []
+
+    for gateway_index, routes in enumerate(routes_generator):
+        logger = module_logger.getChild(f"gateway-{gateway_index}")
+        buses = []
+
+        for route in routes:
+            coordinates = read_route(route)["coordinates"]
+            interval = ceil(len(coordinates) / config.buses_per_route)
+
+            for bus_index in range(config.buses_per_route):
+                bus_id = generate_bus_id(config.emulator_id, route, bus_index)
+                shift = interval * bus_index + randint(0, 2)
+                buses.append(FakeBus(route, bus_id, coordinates_generator(coordinates, shift)))
+
+        logger.debug("Generated %d buses", len(buses))
+        gateway_buses.append((logger, buses))
+
+    return gateway_buses
 
 
 async def send_updates(config: Config, buses: list[Bus], logger: logging.Logger):
@@ -80,6 +127,9 @@ async def send_updates(config: Config, buses: list[Bus], logger: logging.Logger)
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{config.host}:{config.port}") as ws:
             logger.info("Established connection")
+            sleep = 2 * random()
+            logger.debug("Sleeping for %.2fs", sleep)
+            await trio.sleep(sleep)
 
             while True:
                 try:
@@ -97,21 +147,12 @@ async def send_updates(config: Config, buses: list[Bus], logger: logging.Logger)
         raise
 
 
-async def open_gateway(config: Config, index: int, routes: list[str]):
-    gateway_logger = module_logger.getChild(f"gateway-{index}")
-    # send_channel, receive_channel = trio.open_memory_channel(0)
-    buses = []
-    buses_generated = 0
-
+async def open_gateway(config: Config, logger: logging.Logger, buses: list[FakeBus]):
     async with trio.open_nursery() as nursery:
-        for route in routes:
-            for bus_index in range(1, config.buses_per_route + 1):
-                nursery.start_soon(run_bus, buses, route, bus_index, config.emulator_id)
-                buses_generated += 1
+        for bus in buses:
+            nursery.start_soon(bus.run)
 
-        gateway_logger.info("Generated %d buses", buses_generated)
-        # nursery.start_soon(receive_updates, receive_channel, buses)
-        nursery.start_soon(send_updates, config, buses, gateway_logger)
+        nursery.start_soon(send_updates, config, buses, logger)
 
 
 def relaunch_on_disconnect(func: Callable[..., Awaitable]):
@@ -128,46 +169,33 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
                 HandshakeError: handle,
             }):
                 await func(*args, **kwargs)
-            module_logger.info("Sleeping %ds before relaunching", timeout)
+            module_logger.info("Sleeping %ds before relaunch attempt", timeout)
             await trio.sleep(timeout)
 
     return wrapper
 
 
 @relaunch_on_disconnect
-async def imitate(config: Config, gateway_routes: list[GatewayRoutes]):
+async def imitate(config: Config, gateway_buses):
     async with trio.open_nursery() as nursery:
-        for index, routes in gateway_routes:
-            nursery.start_soon(open_gateway, config, index, routes)
-
-
-def distribute_routes(routes_number: int, websockets_number: int) -> list[GatewayRoutes]:
-    route_names = deque(get_route_names(routes_number))
-    routes_per_gateway = ceil(routes_number / websockets_number)
-    gateway_routes: list[GatewayRoutes] = []
-
-    for index in range(websockets_number):
-        routes = []
-        while len(routes) < routes_per_gateway and len(route_names) > 0:
-            routes.append(route_names.popleft())
-        gateway_routes.append((index, routes))
-
-    return gateway_routes
+        for logger, buses in gateway_buses:
+            nursery.start_soon(open_gateway, config, logger, buses)
 
 
 async def main():
-    config = parse_config()
+    config = Config.parse()
     logging.basicConfig(
         format=u"%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s - %(message)s",
         level=logging.DEBUG if config.debug else logging.INFO,
         datefmt="%H:%M:%S",
     )
     logging.getLogger("trio-websocket").setLevel(logging.INFO)
+    module_logger.debug(config)
 
-    gateway_routes = distribute_routes(config.routes_number, config.websockets_number)
+    gateway_buses = distribute_buses(config)
 
     try:
-        await imitate(config, gateway_routes)
+        await imitate(config, gateway_buses)
     except KeyboardInterrupt:
         module_logger.info("Shutting down")
 
