@@ -39,7 +39,7 @@ class MessageType(Enum):
 @register_jsons
 @dataclass(frozen=True)
 class Message:
-    message_type: MessageType
+    msg_type: MessageType
     payload: Any
 
     @classmethod
@@ -52,7 +52,7 @@ class Message:
 
     @staticmethod
     def serialize(obj: "Message", **kwargs) -> dict[str, Any]:
-        message_type = obj.message_type
+        message_type = obj.msg_type
         return {
             "msgType": jsons.dump(message_type, strict=True),
             message_type.payload_name: jsons.dump(obj.payload, strict=True),
@@ -61,11 +61,11 @@ class Message:
     @staticmethod
     def deserialize(obj: dict[str, Any], cls: type, **kwargs) -> "Message":
         try:
-            message_type = jsons.load(obj["msgType"], cls=MessageType, strict=True)
-            if message_type.payload_name not in obj:
-                raise UnfulfilledArgumentError(f"Payload '{message_type.payload_name}' expected", "payload", obj, cls)
-            payload = obj[message_type.payload_name]
-            return Message(message_type, payload)
+            msg_type = jsons.load(obj["msgType"], cls=MessageType, strict=True)
+            if msg_type.payload_name not in obj:
+                raise UnfulfilledArgumentError(f"Payload '{msg_type.payload_name}' expected", "payload", obj, cls)
+            payload = obj[msg_type.payload_name]
+            return Message(msg_type, payload)
         except KeyError as e:
             field = e.args[0]
             raise UnfulfilledArgumentError(f"Missed field '{field}'", field, obj, cls)
