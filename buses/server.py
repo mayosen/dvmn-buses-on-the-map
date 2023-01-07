@@ -6,7 +6,7 @@ from typing import Callable, Awaitable
 
 import jsons
 import trio
-from jsons import UnfulfilledArgumentError
+from jsons import UnfulfilledArgumentError, DeserializationError
 from trio_websocket import WebSocketRequest, WebSocketConnection, ConnectionClosed, serve_websocket
 
 from buses.models import Bus, Message, WindowBounds, MessageType
@@ -52,7 +52,6 @@ async def serve_gateway(request: WebSocketRequest):
     error_response = error_response_builder(ws, logger)
 
     while True:
-        # TODO: tests
         try:
             message = await ws.get_message()
 
@@ -69,7 +68,7 @@ async def serve_gateway(request: WebSocketRequest):
                 for bus in bus_updates:
                     buses[bus.bus_id] = bus
 
-            except UnfulfilledArgumentError as e:
+            except (UnfulfilledArgumentError, DeserializationError) as e:
                 await error_response([e.message])
 
         except ConnectionClosed:
@@ -91,7 +90,6 @@ async def send_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, ti
 
 
 async def listen_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, logger: logging.Logger):
-    # TODO: tests
     error_response = error_response_builder(ws, logger)
 
     while True:
@@ -104,10 +102,14 @@ async def listen_browser_updates(ws: WebSocketConnection, bounds: WindowBounds, 
                 await error_response(["Unsupported message type"])
                 continue
 
-            bounds.update(update.payload)
+            new_bounds = jsons.load(update.payload, dict[str, float])
+            bounds.update(new_bounds)
             logger.debug("Got bounds update")
 
-        except UnfulfilledArgumentError as e:
+        except KeyError as e:
+            await error_response([f"Field {e.args[0]} expected"])
+
+        except (UnfulfilledArgumentError, DeserializationError) as e:
             await error_response([e.message])
 
 
