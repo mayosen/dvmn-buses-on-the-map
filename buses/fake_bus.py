@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 from functools import wraps
 from itertools import islice
-from math import ceil
+from math import ceil, sqrt
 from random import randint, random
 from typing import Callable, Awaitable, Iterable, Any, Collection, Generator
 
@@ -51,20 +51,23 @@ class Config:
 
 
 class FakeBus(Bus):
+    coordinates_ratio = 0.8957 * (10 ** 5)  # Отношение градусов к метрам на широте Москвы * 10^5
+    meters_per_second = 60 / 3.6            # 60 км/ч
+
     def __init__(self, route: str, bus_id: str, generator: Iterable[tuple[float, float]]):
         super().__init__(route, bus_id)
         self.generator = iter(generator)
-        self.move()
-
-    def move(self):
-        latitude, longitude = next(self.generator)
-        self.latitude = latitude
-        self.longitude = longitude
+        self.latitude, self.longitude = next(self.generator)
 
     async def run(self):
         while True:
-            self.move()
-            await trio.sleep(1.5 + random() / 10)
+            latitude, longitude = next(self.generator)
+            degrees = sqrt(pow(latitude - self.latitude, 2) + pow(longitude - self.longitude, 2))
+            distance = degrees * self.coordinates_ratio
+            delay = distance / self.meters_per_second
+            await trio.sleep(delay)
+            self.latitude = latitude
+            self.longitude = longitude
 
 
 def cycle(sequence: Collection[Any]) -> Iterable[Any]:
@@ -127,9 +130,9 @@ async def send_updates(config: Config, buses: list[Bus], logger: logging.Logger)
         ws: WebSocketConnection
         async with open_websocket_url(f"ws://{config.host}:{config.port}") as ws:
             logger.info("Established connection")
-            sleep = 2 * random()
-            logger.debug("Sleeping for %.2fs", sleep)
-            await trio.sleep(sleep)
+            start_delay = 2 * random()
+            logger.debug("Sleeping for %.2fs", start_delay)
+            await trio.sleep(start_delay)
 
             while True:
                 try:
