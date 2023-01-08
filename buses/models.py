@@ -30,9 +30,9 @@ class MessageType(Enum):
 
     @staticmethod
     def deserialize(obj: str, cls: type, **kwargs) -> "MessageType":
-        for message_type in MessageType:
-            if message_type.type_name == obj:
-                return message_type
+        for msg_type in MessageType:
+            if msg_type.type_name == obj:
+                return msg_type
         raise UnfulfilledArgumentError(f"Incorrect message type '{obj}'", "type_", obj, cls)
 
 
@@ -52,10 +52,10 @@ class Message:
 
     @staticmethod
     def serialize(obj: "Message", **kwargs) -> dict[str, Any]:
-        message_type = obj.msg_type
+        msg_type = obj.msg_type
         return {
-            "msgType": jsons.dump(message_type, strict=True),
-            message_type.payload_name: jsons.dump(obj.payload, strict=True),
+            "msgType": jsons.dump(msg_type, strict=True),
+            msg_type.payload_name: jsons.dump(obj.payload, strict=True),
         }
 
     @staticmethod
