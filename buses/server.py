@@ -15,7 +15,7 @@ module_logger = logging.getLogger("server")
 buses: dict[str, Bus] = {}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Config:
     host: str
     bus_port: int

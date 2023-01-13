@@ -19,7 +19,7 @@ from buses.routes import get_route_names, read_route
 module_logger = logging.getLogger("fake_bus")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Config:
     host: str
     port: int
@@ -179,7 +179,7 @@ def relaunch_on_disconnect(func: Callable[..., Awaitable]):
 
 
 @relaunch_on_disconnect
-async def imitate(config: Config, gateway_buses):
+async def imitate(config: Config, gateway_buses: list[tuple[logging.Logger, list[FakeBus]]]):
     async with trio.open_nursery() as nursery:
         for logger, buses in gateway_buses:
             nursery.start_soon(open_gateway, config, logger, buses)

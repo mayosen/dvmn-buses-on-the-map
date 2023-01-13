@@ -37,7 +37,7 @@ class MessageType(Enum):
 
 
 @register_jsons
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Message:
     msg_type: MessageType
     payload: Any
@@ -101,7 +101,7 @@ class Bus:
             raise UnfulfilledArgumentError(f"Missed field '{field}'", field, obj, cls)
 
 
-@dataclass
+@dataclass(slots=True)
 class WindowBounds:
     south_latitude: float | None = None
     north_latitude: float | None = None
